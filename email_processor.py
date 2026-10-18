@@ -1,15 +1,23 @@
 
-import email
-import logging
-from pathlib import Path
 import base64
+import logging
+import os
 import re
-from html.parser import HTMLParser
 from email.utils import parseaddr
+from html.parser import HTMLParser
+from pathlib import Path
+
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+
+# --------------------------------------------------
+# Configuration
+# --------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
@@ -20,58 +28,116 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
 ]
 
-logging.basicConfig(level=logging.INFO)
+MAX_EMAILS = 10
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
-def authenticate():
-    """Authenticate with Google and return valid OAuth credentials."""
+# --------------------------------------------------
+# OAuth Authentication
+# --------------------------------------------------
 
-    if not CREDENTIALS_FILE.exists():
+def authenticate():
+    """Load, refresh, or obtain Google OAuth credentials."""
+
+    if not CREDENTIALS_FILE.is_file():
         raise FileNotFoundError(
             "credentials.json is missing from the project root."
         )
 
     creds = None
 
-    # Reuse credentials from a previous login.
     if TOKEN_FILE.exists():
-        creds = Credentials.from_authorized_user_file(
-            str(TOKEN_FILE),
-            SCOPES,
-        )
+        try:
+            creds = Credentials.from_authorized_user_file(
+                str(TOKEN_FILE)
+            )
+        except (ValueError, OSError):
+            logger.warning(
+                "Saved OAuth token is invalid or unreadable."
+            )
 
-    # Refresh an expired access token if possible.
+    if creds and not creds.has_scopes(SCOPES):
+        logger.warning("Saved token lacks required scopes.")
+        creds = None
+
     if creds and not creds.valid:
         if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except RefreshError:
+                logger.warning(
+                    "Token refresh failed; reauthorization required."
+                )
+                creds = None
         else:
             creds = None
 
-    # Open the browser when authorization is needed.
     if not creds or not creds.valid:
         flow = InstalledAppFlow.from_client_secrets_file(
             str(CREDENTIALS_FILE),
             SCOPES,
         )
-
         creds = flow.run_local_server(port=0)
 
-    # Persist the token locally for subsequent runs.
-    TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
+    # Save the token with restrictive permissions where supported.
+    fd = os.open(
+        str(TOKEN_FILE),
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+        0o600,
+    )
 
-    # Restrict file permissions on systems that support chmod.
+    with os.fdopen(fd, "w", encoding="utf-8") as token_file:
+        token_file.write(creds.to_json())
+
     try:
         TOKEN_FILE.chmod(0o600)
     except OSError:
-        logger.warning("Could not restrict token file permissions.")
+        logger.warning(
+            "Could not set token file permissions."
+        )
 
     logger.info("Google OAuth authentication successful.")
     return creds
 
 
-def list_unread_messages(service, limit=10):
-    """Return a bounded list of unread inbox message references."""
+def get_gmail_service():
+    """Build an authenticated Gmail API client."""
+
+    creds = authenticate()
+
+    return build(
+        "gmail",
+        "v1",
+        credentials=creds,
+        cache_discovery=False,
+    )
+
+
+# --------------------------------------------------
+# Gmail API Operations
+# --------------------------------------------------
+
+def validate_limit(limit):
+    """Validate the maximum number of emails to fetch."""
+
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise ValueError("limit must be an integer.")
+
+    if not 1 <= limit <= 50:
+        raise ValueError("limit must be between 1 and 50.")
+
+    return limit
+
+
+def list_unread_messages(service, limit=MAX_EMAILS):
+    """Return unread inbox message references."""
+
+    limit = validate_limit(limit)
 
     response = (
         service.users()
@@ -88,7 +154,7 @@ def list_unread_messages(service, limit=10):
 
 
 def get_email_details(service, message_id):
-    """Fetch one email's full payload."""
+    """Fetch a single message's full payload."""
 
     return (
         service.users()
@@ -103,7 +169,7 @@ def get_email_details(service, message_id):
 
 
 def get_header(headers, name):
-    """Find a header by name, ignoring case."""
+    """Find an email header without case sensitivity."""
 
     for header in headers or []:
         if header.get("name", "").lower() == name.lower():
@@ -112,65 +178,12 @@ def get_header(headers, name):
     return ""
 
 
-def decode_body(data):
-    """Decode a Gmail URL-safe Base64 body."""
-    if not data:
-        return ""
-
-    padded = data + "=" * (-len(data) % 4)
-    decoded = base64.urlsafe_b64decode(padded)
-
-    return decoded.decode("utf-8", errors="replace")
-
-
-"""def extract_body(payload):
-    
-
-    plain_parts = []
-    html_parts = []
-
-    def visit(part):
-        data = (part.get("body") or {}).get("data")
-        mime_type = part.get("mimeType", "")
-
-        if data:
-            content = decode_body(data)
-
-            if mime_type == "text/plain":
-                plain_parts.append(content)
-            elif mime_type == "text/html":
-                html_parts.append(content)
-
-        for child in part.get("parts", []) or []:
-            visit(child)
-
-    visit(payload)
-
-    if plain_parts:
-        return "\n".join(plain_parts).strip()
-
-    if html_parts:
-        parser = HTMLTextExtractor()
-        parser.feed("\n".join(html_parts))
-        return re.sub(
-            r"\s+", " ", "".join(parser.parts)
-        ).strip()
-
-    return ""
-"""
-
-
-import base64
-import logging
-import re
-from html.parser import HTMLParser
-
-
-logger = logging.getLogger(__name__)
-
+# --------------------------------------------------
+# Email Body Parsing
+# --------------------------------------------------
 
 class HTMLTextExtractor(HTMLParser):
-    """Convert HTML email content into readable text."""
+    """Extract readable text from HTML email content."""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -199,37 +212,39 @@ class HTMLTextExtractor(HTMLParser):
 
 
 def decode_body(data):
-    """Decode a Gmail URL-safe Base64 body."""
+    """Decode Gmail's URL-safe Base64 body data."""
+
     if not data:
         return ""
 
     try:
         padded = data + "=" * (-len(data) % 4)
-        raw = base64.urlsafe_b64decode(padded)
-        return raw.decode("utf-8", errors="replace")
+        decoded = base64.b64decode(
+            padded,
+            altchars=b"-_",
+            validate=True,
+        )
+        return decoded.decode("utf-8", errors="replace")
     except (ValueError, TypeError):
-        logger.warning("Could not decode an email body part")
+        logger.warning("Could not decode an email body part.")
         return ""
 
 
 def extract_body(payload):
-    """Extract plain text, falling back to HTML."""
+    """Prefer plain text, falling back to HTML."""
 
     plain_parts = []
     html_parts = []
 
     def visit(part):
-        # Do not process attachment content as the email body.
+        # Skip attachments rather than treating them as message text.
         if part.get("filename"):
             return
 
-        headers = part.get("headers", [])
-        disposition = ""
-
-        for header in headers:
-            if header.get("name", "").lower() == "content-disposition":
-                disposition = header.get("value", "").lower()
-                break
+        disposition = get_header(
+            part.get("headers", []),
+            "Content-Disposition",
+        ).lower()
 
         if "attachment" in disposition:
             return
@@ -238,12 +253,12 @@ def extract_body(payload):
         body_data = (part.get("body") or {}).get("data")
 
         if body_data:
-            decoded = decode_body(body_data)
+            content = decode_body(body_data)
 
             if mime_type == "text/plain":
-                plain_parts.append(decoded)
+                plain_parts.append(content)
             elif mime_type == "text/html":
-                html_parts.append(decoded)
+                html_parts.append(content)
 
         for child in part.get("parts", []) or []:
             visit(child)
@@ -259,30 +274,43 @@ def extract_body(payload):
         parser.close()
 
         return re.sub(
-            r"\s+", " ", "".join(parser.parts)
+            r"\s+",
+            " ",
+            "".join(parser.parts),
         ).strip()
 
     return ""
 
 
-def fetch_unread_emails(service, limit=10):
-    """Return structured records for unread inbox messages."""
+# --------------------------------------------------
+# Email Processing
+# --------------------------------------------------
+
+def fetch_unread_emails(service, limit=MAX_EMAILS):
+    """Fetch unread emails and return structured records."""
 
     references = list_unread_messages(service, limit)
     emails = []
 
     for reference in references:
-        message = get_email_details(service, reference["id"])
+        message_id = reference["id"]
+
+        # Fail clearly if a message cannot be retrieved.
+        # Do not silently report an incomplete batch as successful.
+        message = get_email_details(service, message_id)
+
         payload = message.get("payload", {})
         headers = payload.get("headers", [])
 
         sender = get_header(headers, "From")
 
         emails.append({
-            "id": message["id"],
+            "id": message_id,
             "thread_id": message.get("threadId", ""),
             "sender": parseaddr(sender)[1] or sender,
-            "subject": get_header(headers, "Subject") or "(No subject)",
+            "subject": (
+                get_header(headers, "Subject") or "(No subject)"
+            ),
             "date": get_header(headers, "Date"),
             "body": extract_body(payload),
             "labels": message.get("labelIds", []),
@@ -291,39 +319,39 @@ def fetch_unread_emails(service, limit=10):
     return emails
 
 
-def get_gmail_service():
-    """Build an authenticated Gmail API client."""
-    creds = authenticate()
-
-    service = build(
-        "gmail",
-        "v1",
-        credentials=creds,
-        cache_discovery=False,
-    )
-
-    return service
-
-
+# --------------------------------------------------
+# Application Entry Point
+# --------------------------------------------------
 
 def main():
     try:
         service = get_gmail_service()
-        emails = fetch_unread_emails(service, limit=10)
+        emails = fetch_unread_emails(service)
 
         print(f"Fetched {len(emails)} unread emails.")
 
-        for email in emails:
+        for item in emails:
             print("-" * 50)
-            print(f"ID: {email['id']}")
-            print(f"From: {email['sender']}")
-            print(f"Subject: {email['subject']}")
-            print(f"Date: {email['date']}")
-            print(f"Body length: {len(email['body'])} characters")
-            print(f"Body preview: {email['body'][:500]}")
+            print(f"ID: {item['id']}")
+            print(f"From: {item['sender']}")
+            print(f"Subject: {item['subject']}")
+            print(f"Date: {item['date']}")
+            print(f"Body length: {len(item['body'])} characters")
+            print(f"Body preview: {item['body'][:200]}")
+
+    except HttpError as exc:
+        logger.error(
+            "Gmail API request failed with HTTP status %s.",
+            exc.resp.status,
+        )
+        raise SystemExit(1) from exc
+
+    except (FileNotFoundError, RefreshError, ValueError):
+        logger.exception("Configuration or authentication failed.")
+        raise SystemExit(1)
 
     except Exception:
-        logger.exception("Email fetching failed.")
+        logger.exception("Email processing failed.")
         raise SystemExit(1)
 
 
