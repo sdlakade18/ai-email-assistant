@@ -16,7 +16,6 @@ def main():
 
     email = emails[0]
 
-    # Use only a test email where creating a draft is appropriate.
     reply_text = (
         "Hi,\n\n"
         "Thank you for your email. I have received it "
@@ -24,13 +23,17 @@ def main():
         "Regards"
     )
 
-    draft = create_reply_draft(
+    draft, was_created = create_reply_draft(
         service=service,
         email_record=email,
         reply_text=reply_text,
     )
 
-    print("Reply draft created successfully.")
+    if was_created:
+        print("New reply draft created successfully.")
+    else:
+        print("An existing draft was reused; no duplicate was created.")
+
     print(f"Draft ID: {draft['id']}")
 
 

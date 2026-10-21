@@ -100,7 +100,7 @@ def create_reply_draft(service, email_record, reply_text):
         logger.info(
         "Draft already exists for thread; skipping creation."
     )
-        return existing_draft
+        return existing_draft, False
     subject = email_record.get("subject", "")
 
     # Retrieve the original Message-ID and References headers.
@@ -170,4 +170,4 @@ def create_reply_draft(service, email_record, reply_text):
     )
 
     logger.info("Created a reply draft for message ID %s", original_message_id)
-    return draft
+    return draft, True

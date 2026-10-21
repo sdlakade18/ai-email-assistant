@@ -19,3 +19,8 @@ client_secret*.json
 # Test artifacts
 .pytest_cache/
 .coverage
+
+# Local database and runtime data
+data/
+*.db
+*.sqlite3
