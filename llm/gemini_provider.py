@@ -16,7 +16,7 @@ class GeminiProvider(LLMProvider):
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY is not configured.")
         
-        self.model = os.getenv("GEMINI_MODEL","gemini-flash-latest")
+        self.model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
         
         self.client = genai.Client(api_key=api_key)
      
@@ -25,6 +25,8 @@ class GeminiProvider(LLMProvider):
         subject: str,
         body: str,
     ) -> EmailClassification:
+        if not subject.strip() and not body.strip():
+            raise ValueError("Email subject and body cannot both be empty.")
         prompt = f"""
 You are an email classification assistant.
 

@@ -134,8 +134,9 @@ def validate_limit(limit):
     return limit
 
 
+
 def list_unread_messages(service, limit=MAX_EMAILS):
-    """Return unread inbox message references."""
+    """Return unread inbox messages not yet processed by our AI."""
 
     limit = validate_limit(limit)
 
@@ -144,14 +145,13 @@ def list_unread_messages(service, limit=MAX_EMAILS):
         .messages()
         .list(
             userId="me",
-            q="in:inbox is:unread",
+            q="in:inbox is:unread -label:AI/Processed",
             maxResults=limit,
         )
         .execute()
     )
 
     return response.get("messages", [])
-
 
 def get_email_details(service, message_id):
     """Fetch a single message's full payload."""
