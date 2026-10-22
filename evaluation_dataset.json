@@ -1,0 +1,53 @@
+
+[
+  {
+    "id": "eval-001",
+    "subject": "Production deployment blocked",
+    "body": "The production deployment has failed. Please investigate and resolve the issue before today's release deadline.",
+    "expected": {
+      "category": "Work",
+      "urgency": "high",
+      "needs_reply": true
+    }
+  },
+  {
+    "id": "eval-002",
+    "subject": "Dinner this weekend",
+    "body": "Would you like to join us for dinner at home on Saturday? Let me know if you can make it.",
+    "expected": {
+      "category": "Personal",
+      "urgency": "low",
+      "needs_reply": true
+    }
+  },
+  {
+    "id": "eval-003",
+    "subject": "Your monthly account statement",
+    "body": "Your monthly account statement is now available. Sign in to your account to view your transactions.",
+    "expected": {
+      "category": "Finance",
+      "urgency": "low",
+      "needs_reply": false
+    }
+  },
+  {
+    "id": "eval-004",
+    "subject": "Limited-time shopping offer",
+    "body": "Enjoy 20 percent off selected products this weekend. Shop our collection online.",
+    "expected": {
+      "category": "Promotions",
+      "urgency": "low",
+      "needs_reply": false
+    }
+  },
+  {
+    "id": "eval-005",
+    "subject": "Meeting moved to 3 PM",
+    "body": "Today's project meeting has been moved to 3 PM. Please confirm whether you can attend.",
+    "expected": {
+      "category": "Work",
+      "urgency": "medium",
+      "needs_reply": true
+    }
+  }
+]

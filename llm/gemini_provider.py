@@ -4,7 +4,7 @@ from google.genai import types
 import os
 from llm.base import LLMProvider
 from schemas import EmailClassification
-
+from llm.observability import trace_classification
 load_dotenv()  # Load environment variables from .env file
 
 class GeminiProvider(LLMProvider):
@@ -20,6 +20,7 @@ class GeminiProvider(LLMProvider):
         
         self.client = genai.Client(api_key=api_key)
      
+     @trace_classification
      def classify_email(
         self,
         subject: str,
