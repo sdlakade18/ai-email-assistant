@@ -1,5 +1,5 @@
 
-import logging
+import logging,os
 from collections import Counter
 from audit_store import (
     start_processing,
@@ -110,6 +110,7 @@ def main():
                 )
 
             # Create a draft only when the classifier says one is needed.
+
             if result.needs_reply:
                 draft_text = (
                     "Hi,\n\n"
@@ -119,24 +120,19 @@ def main():
                 )
 
                 draft, was_created = create_reply_draft(
-                service=service,
-                email_record=email,
-                reply_text=draft_text,
-            )
-
-            record_draft(
-                message_id=message_id,
-                draft_id=draft["id"],
-            )
-
-            if was_created:
-                drafts_created += 1
+                    service=service,
+                    email_record=email,
+                    reply_text=draft_text,
+                )
 
                 record_draft(
                     message_id=message_id,
                     draft_id=draft["id"],
                 )
-                drafts_created += 1
+
+                if was_created:
+                    drafts_created += 1
+
 
             # Mark as processed only after the required actions succeed.
             apply_label(
@@ -204,5 +200,12 @@ def main():
     print("\n" + summary.replace("*", ""))
 
 
+
 if __name__ == "__main__":
-    main()
+    if os.getenv("DRY_RUN", "true").lower() != "false":
+        print(
+            "Safety mode enabled: email processing is disabled. "
+            "Set DRY_RUN=false only when ready to process real emails."
+        )
+    else:
+        main()

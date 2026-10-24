@@ -6,7 +6,8 @@ import re
 from email.utils import parseaddr
 from html.parser import HTMLParser
 from pathlib import Path
-
+import json
+import boto3
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -41,9 +42,78 @@ logger = logging.getLogger(__name__)
 # OAuth Authentication
 # --------------------------------------------------
 
+def authenticate_from_aws_secret():
+    """Authenticate Gmail using credentials stored in AWS Secrets Manager."""
+
+    secret_name = os.getenv(
+        "AWS_SECRET_NAME",
+        "ai-email-assistant/production",
+    )
+    region = os.getenv("AWS_REGION", "ap-south-1")
+
+    client = boto3.client("secretsmanager", region_name=region)
+
+    try:
+        response = client.get_secret_value(SecretId=secret_name)
+        secret = json.loads(response["SecretString"])
+
+        client_info = json.loads(secret["GMAIL_CREDENTIALS_JSON"])
+        token_info = json.loads(secret["GMAIL_TOKEN_JSON"])
+
+        if not isinstance(client_info, dict) or not isinstance(token_info, dict):
+            raise ValueError("Gmail OAuth credentials and token must be JSON objects.")
+
+        if not client_info.get("installed") and not client_info.get("web"):
+            raise ValueError("Gmail OAuth client configuration is missing.")
+
+    except Exception as exc:
+        logger.error("Unable to load Gmail credentials from AWS Secrets Manager.")
+        raise RuntimeError(
+            "Could not load Gmail credentials from AWS Secrets Manager. "
+            "Check the secret name, region, IAM permissions, and secret format."
+        ) from exc
+
+    creds = Credentials.from_authorized_user_info(
+        token_info,
+        scopes=SCOPES,
+    )
+
+    if not creds.has_scopes(SCOPES):
+        raise RuntimeError(
+            "The Gmail OAuth token lacks required scopes. "
+            "Reauthorize Gmail locally and update GMAIL_TOKEN_JSON in Secrets Manager."
+        )
+
+    if not creds.valid:
+        if not creds.expired or not creds.refresh_token:
+            raise RuntimeError(
+                "The Gmail OAuth token is invalid or has no refresh token. "
+                "Reauthorize locally and update GMAIL_TOKEN_JSON in Secrets Manager."
+            )
+
+        old_refresh_token = creds.refresh_token
+
+        try:
+            creds.refresh(Request())
+        except RefreshError as exc:
+            raise RuntimeError(
+                "Gmail token refresh failed. Reauthorize locally and update "
+                "GMAIL_TOKEN_JSON in Secrets Manager."
+            ) from exc
+
+        if creds.refresh_token != old_refresh_token:
+            raise RuntimeError(
+                "Google returned a different refresh token. Update "
+                "GMAIL_TOKEN_JSON in Secrets Manager before retrying."
+            )
+
+    logger.info("Google OAuth authentication successful using AWS Secrets Manager.")
+    return creds
+
 def authenticate():
     """Load, refresh, or obtain Google OAuth credentials."""
-
+    if os.getenv("AWS_SECRETS_MODE", "").lower() == "true":
+        return authenticate_from_aws_secret()
     if not CREDENTIALS_FILE.is_file():
         raise FileNotFoundError(
             "credentials.json is missing from the project root."
