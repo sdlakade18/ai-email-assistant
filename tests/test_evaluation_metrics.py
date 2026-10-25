@@ -1,7 +1,7 @@
 
 import unittest
 
-from evaluation_metrics import calculate_metrics
+from evaluation.evaluation_metrics import calculate_metrics
 
 
 class TestEvaluationMetrics(unittest.TestCase):
