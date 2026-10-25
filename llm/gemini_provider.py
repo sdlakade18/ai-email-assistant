@@ -5,14 +5,15 @@ import os
 from llm.base import LLMProvider
 from schemas import EmailClassification
 from llm.observability import trace_classification
+from aws_secrets import get_secret_value
 load_dotenv()  # Load environment variables from .env file
 
 class GeminiProvider(LLMProvider):
      """Classify emails using Google's Gemini API."""
      
      def __init__(self):
-        api_key = os.getenv("GEMINI_API_KEY")
-         
+        api_key = get_secret_value("GEMINI_API_KEY")
+        
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY is not configured.")
         
